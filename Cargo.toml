@@ -1,0 +1,31 @@
+[package]
+name = "ssm-connect"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# AWS SDK
+aws-config = { version = "1.5", features = ["behavior-version-latest"] }
+aws-sdk-ec2 = "1.96"
+aws-sdk-ssm = "1.92"
+aws-sdk-sts = "1.93"
+aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
+
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+futures = "0.3"
+
+# TUI
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tui-textarea = "0.7"
+
+# Error handling & utilities
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
