@@ -1,9 +1,13 @@
 [package]
 name = "ssm-connect"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+
 # AWS SDK
 aws-config = { version = "1.5", features = ["behavior-version-latest"] }
 aws-sdk-ec2 = "1.96"

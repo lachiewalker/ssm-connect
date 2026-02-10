@@ -7,6 +7,7 @@ mod ui;
 
 use app::App;
 use aws::{CredentialManager, SsmManager};
+use clap::Parser;
 use config::Settings;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -17,8 +18,40 @@ use std::io::{self, stdout};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::layer::SubscriberExt;
 
+/// A modern terminal UI for connecting to EC2 instances via AWS Systems Manager (SSM)
+#[derive(Parser)]
+#[command(name = "ssm-connect")]
+#[command(version = "1.0.0")]
+#[command(about = "Connect to EC2 instances via AWS Systems Manager")]
+#[command(long_about = "A modern terminal UI for connecting to EC2 instances via AWS Systems Manager (SSM).
+
+Features:
+  • Automatic AWS credential discovery with manual fallback
+  • Visual instance browser with real-time status
+  • Quick instance starting for stopped instances
+  • Easy region switching
+  • Keyboard-driven interface
+  • Auto-execute commands on connection
+
+Configuration:
+  Config file: ~/.config/ssm-connect/config.json
+  Logs: ~/.local/share/ssm-connect/logs/
+
+Keyboard Shortcuts:
+  ↑/↓ or j/k - Navigate
+  Enter      - Connect to instance
+  s          - Start stopped instance
+  r          - Change region
+  c          - Configure auto-execute commands
+  ?          - Toggle help
+  q/Esc      - Quit
+")]
+struct Cli {}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse command line arguments (handles --help and --version automatically)
+    let _cli = Cli::parse();
     // Setup logging
     if let Some(log_dir) = dirs::data_local_dir() {
         let log_path = log_dir.join("ssm-connect").join("logs");
