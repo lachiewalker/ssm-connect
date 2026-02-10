@@ -1,21 +1,21 @@
-# SSM-Connect CLI
+# SSM-Connect TUI
 
 A modern terminal UI for connecting to EC2 instances via AWS Systems Manager (SSM).
 
 ## Features
 
 - 🔐 Automatic AWS credential discovery with manual fallback
-- 📊 Visual instance browser with real-time SSM status
+- 📊 Visual instance browser
 - 🚀 Quick instance starting for stopped instances
 - 🌍 Easy region switching
 - ⌨️ Keyboard-driven interface
-- 🎨 Clean, modern TUI built with ratatui
+- 🎨 Clean, modern TUI built with [ratatui](https://github.com/ratatui/ratatui)
 
 ## Prerequisites
 
 - [AWS CLI](https://aws.amazon.com/cli/) with [Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
 - Valid AWS credentials with appropriate IAM permissions
-- EC2 instances with SSM agent installed and configured
+- EC2 instance with SSM agent installed and configured
 
 ## Installation
 
@@ -38,23 +38,6 @@ Simply run the application:
 ssm-connect
 ```
 
-### Keyboard Shortcuts
-
-**Instance List:**
-- `↑/↓` or `j/k` - Navigate through instances
-- `Enter` - Connect to selected instance
-- `s` - Start a stopped instance
-- `r` - Change AWS region
-- `?` - Toggle help screen
-- `q` or `Esc` - Quit
-
-**Credential Input:**
-- `Tab` - Switch between fields
-- `Shift+Tab` - Switch backwards
-- `Enter` - Submit credentials
-- `Ctrl+D` - Try default credentials
-- `Ctrl+Q` - Quit
-
 ## Configuration
 
 Configuration is stored in `~/.config/ssm-connect/config.json`:
@@ -67,13 +50,6 @@ Configuration is stored in `~/.config/ssm-connect/config.json`:
   "theme": "dark"
 }
 ```
-
-## SSM Status Indicators
-
-- `✓` (Green) - Online - Ready for connections
-- `⚠` (Yellow) - Connection Lost - Agent offline
-- `✗` (Red) - Not Installed - SSM agent not available
-- `?` (Gray) - Unknown - Status unavailable
 
 ## IAM Permissions Required
 
@@ -100,7 +76,3 @@ Your AWS credentials need the following permissions:
 ## Logs
 
 Logs are stored in `~/.local/share/ssm-connect/logs/`
-
-## License
-
-MIT
