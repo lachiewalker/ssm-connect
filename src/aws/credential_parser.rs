@@ -211,22 +211,22 @@ AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
     #[test]
     fn test_parse_aws_console_format() {
         // This is the exact format from AWS console's "Copy credentials" button
-        let input = r#"export AWS_ACCESS_KEY_ID="ASIAR7HWYIBKXXXXXXXX"
-export AWS_SECRET_ACCESS_KEY="XXXXXXXX0owZ234XXXXXXXXWE1y6Eq2EXXXXXXXX"
-export AWS_SESSION_TOKEN="IQoJb3JpZ2luX2VjEMz//////////wEaCXVzLWVhc3QtMSJIMEYCIQCvLkExample""#;
+        let input = r#"export AWS_ACCESS_KEY_ID="XXXXXXXXXXXXXXXXXXX"
+export AWS_SECRET_ACCESS_KEY="YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+export AWS_SESSION_TOKEN="ZZZZZZZZZZZZZZ//////////WWWWWWWWWWWWWWWWWW""#;
 
         let result = parse_aws_credentials(input);
         assert!(result.is_some(), "Failed to parse AWS console format");
 
         let creds = result.unwrap();
-        assert_eq!(creds.access_key.as_deref(), Some("ASIAR7HWYIBKXXXXXXXX"));
+        assert_eq!(creds.access_key.as_deref(), Some("XXXXXXXXXXXXXXXXXXX"));
         assert_eq!(
             creds.secret_key.as_deref(),
-            Some("XXXXXXXX0owZ234XXXXXXXXWE1y6Eq2EXXXXXXXX")
+            Some("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
         );
         assert_eq!(
             creds.session_token.as_deref(),
-            Some("IQoJb3JpZ2luX2VjEMz//////////wEaCXVzLWVhc3QtMSJIMEYCIQCvLkExample")
+            Some("ZZZZZZZZZZZZZZ//////////WWWWWWWWWWWWWWWWWW")
         );
     }
 }
