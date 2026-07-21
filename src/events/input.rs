@@ -1,4 +1,4 @@
-use crate::app::{App, Message, Screen, SettingsMode};
+use crate::app::{App, Message, PortForwardsMode, Screen, SettingsMode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub fn handle_key_event(app: &App, key: KeyEvent) -> Option<Message> {
@@ -28,9 +28,10 @@ pub fn handle_key_event(app: &App, key: KeyEvent) -> Option<Message> {
             KeyCode::Char('s') => Some(Message::StartInstance),
             KeyCode::Char('r') => Some(Message::ChangeRegion),
             KeyCode::Char('c') => Some(Message::OpenSettings),
+            KeyCode::Char('p') => Some(Message::OpenPortForwards),
             KeyCode::Char('?') => Some(Message::ToggleHelp),
             _ => {
-                if app.error_message.is_some() {
+                if app.error_message.is_some() || app.info_message.is_some() {
                     Some(Message::ClearError)
                 } else {
                     None
@@ -64,6 +65,36 @@ pub fn handle_key_event(app: &App, key: KeyEvent) -> Option<Message> {
                     KeyCode::Enter => Some(Message::SaveCommand),
                     KeyCode::Esc => Some(Message::CancelEdit),
                     _ => None,  // TextArea handles other keys
+                },
+            }
+        },
+        Screen::PortForwards(state) => {
+            match state.mode {
+                PortForwardsMode::InstanceToggle => match key.code {
+                    KeyCode::Esc => Some(Message::Back),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Message::NavigateUp),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Message::NavigateDown),
+                    KeyCode::Char(' ') | KeyCode::Enter => Some(Message::TogglePortForward),
+                    KeyCode::Char('r') => Some(Message::OpenPortForwardRules),
+                    _ => None,
+                },
+                PortForwardsMode::GlobalEdit => match key.code {
+                    KeyCode::Esc => Some(Message::Back),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Message::NavigateUp),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Message::NavigateDown),
+                    KeyCode::Char('a') => Some(Message::AddPortForwardRule),
+                    KeyCode::Char('e') => Some(Message::EditPortForwardRule),
+                    KeyCode::Char('d') => Some(Message::DeletePortForwardRule),
+                    _ => None,
+                },
+                PortForwardsMode::EditRule => match key.code {
+                    KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        Some(Message::PreviousPortForwardField)
+                    }
+                    KeyCode::Tab => Some(Message::NextPortForwardField),
+                    KeyCode::Enter => Some(Message::SavePortForwardRule),
+                    KeyCode::Esc => Some(Message::CancelPortForwardEdit),
+                    _ => None, // TextArea handles other keys
                 },
             }
         },

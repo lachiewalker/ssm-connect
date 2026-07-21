@@ -16,6 +16,8 @@ pub fn render(f: &mut Frame, area: Rect) {
         Span::raw(" Region | "),
         Span::styled("[c]", Style::default().fg(Color::Green)),
         Span::raw(" Commands | "),
+        Span::styled("[p]", Style::default().fg(Color::Green)),
+        Span::raw(" Forwards | "),
         Span::styled("[?]", Style::default().fg(Color::Green)),
         Span::raw(" Help | "),
         Span::styled("[q]", Style::default().fg(Color::Green)),

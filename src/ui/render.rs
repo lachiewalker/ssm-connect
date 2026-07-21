@@ -13,7 +13,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
             let instances = &app.instances;
             let selected_instance = app.selected_instance;
             let error_message = &app.error_message;
-            screens::instance_list::render_with_data(f, region, instances, selected_instance, error_message);
+            let info_message = &app.info_message;
+            let settings = &app.settings;
+            screens::instance_list::render_with_data(f, region, instances, selected_instance, error_message, info_message, settings);
         }
         Screen::RegionSelection { selected } => {
             let region = &app.region;
@@ -24,6 +26,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
         Screen::Settings(state) => {
             screens::settings::render(f, state, &app.settings);
+        }
+        Screen::PortForwards(state) => {
+            screens::port_forwards::render(f, state, &app.settings);
         }
     }
 

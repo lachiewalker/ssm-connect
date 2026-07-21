@@ -1,6 +1,9 @@
-use crate::app::{App, Message, Screen, SettingsMode, SettingsScreenState};
+use crate::app::{
+    App, Message, PortForwardEditState, PortForwardField, PortForwardsMode, PortForwardsScreenState,
+    Screen, SettingsMode, SettingsScreenState,
+};
 use crate::aws::{CredentialManager, Ec2Manager};
-use crate::config::Settings;
+use crate::config::{PortForwardingRule, Settings};
 use crate::events::input::handle_key_event;
 use crate::error::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
@@ -133,6 +136,27 @@ impl EventHandler {
                                             }
                                         }
                                     }
+                                } else if let Screen::PortForwards(ref mut state) = app.screen {
+                                    if state.mode == PortForwardsMode::EditRule {
+                                        if let Some(ref mut edit) = state.edit_state {
+                                            let field = match edit.focused_field {
+                                                PortForwardField::Alias => &mut edit.alias,
+                                                PortForwardField::LocalPort => &mut edit.local_port,
+                                                PortForwardField::RemotePort => &mut edit.remote_port,
+                                            };
+                                            match key.code {
+                                                KeyCode::Char(c) => {
+                                                    field.insert_char(c);
+                                                }
+                                                KeyCode::Backspace => {
+                                                    field.delete_char();
+                                                }
+                                                _ => {
+                                                    field.input(key);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -147,7 +171,10 @@ impl EventHandler {
 
                 // Periodic tick for state updates
                 _ = tick_interval.tick() => {
-                    // Could add periodic refresh logic here
+                    // Poll for instance state changes if needed
+                    if app.polling_instance_state && matches!(app.screen, Screen::InstanceList) {
+                        let _ = self.tx.send(Message::ReloadInstances);
+                    }
                 }
 
                 // Render interval
@@ -315,7 +342,7 @@ impl EventHandler {
                                         let _ = tx.send(Message::InstanceStarted(instance_id));
                                         // Reload instances after a delay
                                         tokio::time::sleep(Duration::from_secs(2)).await;
-                                        let _ = tx.send(Message::UseDefaultCredentials);
+                                        let _ = tx.send(Message::ReloadInstances);
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Message::Error(format!(
@@ -342,10 +369,56 @@ impl EventHandler {
                         return;
                     }
 
+                    // Warn if instance was recently started and SSM might not be ready
+                    if app.polling_instance_state {
+                        let _ = self.tx.send(Message::Error(
+                            "Instance recently started - SSM agent may not be ready yet. Connection might fail. Try again in 30-60 seconds if it fails.".to_string()
+                        ));
+                        // Give user a moment to read the warning, but allow them to proceed
+                        return;
+                    }
+
                     // Store the instance ID for connection after TUI exits
                     // If SSM is not available, AWS CLI will give a proper error
                     app.pending_connection = Some(instance.id.clone());
                     app.should_quit = true;
+                }
+            }
+            Message::ReloadInstances => {
+                // Reload instances without changing region or re-validating credentials
+                if let Some(creds) = &app.credentials {
+                    let tx = self.tx.clone();
+                    let creds_clone = creds.clone();
+                    let region = app.region.clone();
+                    // Don't show loading overlay during polling - only for user-initiated reloads
+                    if !app.polling_instance_state {
+                        app.loading = crate::app::LoadingState::LoadingInstances;
+                    }
+
+                    tokio::spawn(async move {
+                        let config = if creds_clone.access_key_id == "default" {
+                            CredentialManager::discover_credentials().await.ok().flatten()
+                        } else {
+                            CredentialManager::build_config(&creds_clone, &region)
+                                .await
+                                .ok()
+                        };
+
+                        if let Some(config) = config {
+                            let ec2 = Ec2Manager::new(&config);
+                            match ec2.list_instances().await {
+                                Ok(instances) => {
+                                    let _ = tx.send(Message::InstancesLoaded(instances));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Message::Error(format!(
+                                        "Failed to load instances: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        }
+                    });
                 }
             }
             Message::RegionChanged(new_region) => {
@@ -493,6 +566,193 @@ impl EventHandler {
                     state.mode = SettingsMode::List;
                     state.edit_textarea = None;
                     state.edit_index = None;
+                }
+            }
+
+            // --- Port forwarding messages ---
+            Message::OpenPortForwards => {
+                if let Some(instance) = app.selected_instance() {
+                    let instance_id = instance.id.clone();
+                    let instance_name = instance.name.clone();
+                    app.screen = Screen::PortForwards(PortForwardsScreenState {
+                        mode: PortForwardsMode::InstanceToggle,
+                        instance_id,
+                        instance_name,
+                        selected_rule: 0,
+                        edit_state: None,
+                    });
+                }
+            }
+            Message::TogglePortForward => {
+                if let Screen::PortForwards(ref state) = app.screen {
+                    let instance_id = state.instance_id.clone();
+                    let selected = state.selected_rule;
+                    if selected < app.settings.port_forwarding_rules.len() {
+                        let alias = app.settings.port_forwarding_rules[selected].alias.clone();
+                        let enabled = app.settings.instance_port_forwards
+                            .entry(instance_id)
+                            .or_default();
+                        if let Some(pos) = enabled.iter().position(|a| a == &alias) {
+                            enabled.remove(pos);
+                        } else {
+                            enabled.push(alias);
+                        }
+                        if let Err(e) = app.settings.save() {
+                            app.error_message = Some(format!("Failed to save settings: {}", e));
+                        }
+                    }
+                }
+            }
+            Message::OpenPortForwardRules => {
+                if let Screen::PortForwards(ref mut state) = app.screen {
+                    state.mode = PortForwardsMode::GlobalEdit;
+                    state.selected_rule = 0;
+                }
+            }
+            Message::AddPortForwardRule => {
+                if let Screen::PortForwards(ref mut state) = app.screen {
+                    let mut alias_ta = TextArea::default();
+                    alias_ta.set_block(
+                        ratatui::widgets::Block::default()
+                            .title("Alias")
+                            .borders(ratatui::widgets::Borders::ALL)
+                    );
+                    let mut local_ta = TextArea::default();
+                    local_ta.set_block(
+                        ratatui::widgets::Block::default()
+                            .title("Local Port")
+                            .borders(ratatui::widgets::Borders::ALL)
+                    );
+                    let mut remote_ta = TextArea::default();
+                    remote_ta.set_block(
+                        ratatui::widgets::Block::default()
+                            .title("Remote Port")
+                            .borders(ratatui::widgets::Borders::ALL)
+                    );
+                    state.mode = PortForwardsMode::EditRule;
+                    state.edit_state = Some(PortForwardEditState {
+                        alias: alias_ta,
+                        local_port: local_ta,
+                        remote_port: remote_ta,
+                        focused_field: PortForwardField::Alias,
+                        edit_index: None,
+                    });
+                }
+            }
+            Message::EditPortForwardRule => {
+                if let Screen::PortForwards(ref mut state) = app.screen {
+                    let selected = state.selected_rule;
+                    if selected < app.settings.port_forwarding_rules.len() {
+                        let rule = &app.settings.port_forwarding_rules[selected];
+                        let mut alias_ta = TextArea::default();
+                        alias_ta.insert_str(&rule.alias);
+                        alias_ta.set_block(
+                            ratatui::widgets::Block::default()
+                                .title("Alias")
+                                .borders(ratatui::widgets::Borders::ALL)
+                        );
+                        let mut local_ta = TextArea::default();
+                        local_ta.insert_str(&rule.local_port.to_string());
+                        local_ta.set_block(
+                            ratatui::widgets::Block::default()
+                                .title("Local Port")
+                                .borders(ratatui::widgets::Borders::ALL)
+                        );
+                        let mut remote_ta = TextArea::default();
+                        remote_ta.insert_str(&rule.remote_port.to_string());
+                        remote_ta.set_block(
+                            ratatui::widgets::Block::default()
+                                .title("Remote Port")
+                                .borders(ratatui::widgets::Borders::ALL)
+                        );
+                        state.mode = PortForwardsMode::EditRule;
+                        state.edit_state = Some(PortForwardEditState {
+                            alias: alias_ta,
+                            local_port: local_ta,
+                            remote_port: remote_ta,
+                            focused_field: PortForwardField::Alias,
+                            edit_index: Some(selected),
+                        });
+                    }
+                }
+            }
+            Message::DeletePortForwardRule => {
+                if let Screen::PortForwards(ref mut state) = app.screen {
+                    let selected = state.selected_rule;
+                    if selected < app.settings.port_forwarding_rules.len() {
+                        let alias = app.settings.port_forwarding_rules[selected].alias.clone();
+                        app.settings.port_forwarding_rules.remove(selected);
+                        // Remove this alias from all per-instance maps
+                        for enabled in app.settings.instance_port_forwards.values_mut() {
+                            enabled.retain(|a| a != &alias);
+                        }
+                        // Adjust selected_rule
+                        if !app.settings.port_forwarding_rules.is_empty() {
+                            if state.selected_rule >= app.settings.port_forwarding_rules.len() {
+                                state.selected_rule = app.settings.port_forwarding_rules.len() - 1;
+                            }
+                        } else {
+                            state.selected_rule = 0;
+                        }
+                        if let Err(e) = app.settings.save() {
+                            app.error_message = Some(format!("Failed to save settings: {}", e));
+                        }
+                    }
+                }
+            }
+            Message::SavePortForwardRule => {
+                if let Screen::PortForwards(ref mut state) = app.screen {
+                    if let Some(ref edit) = state.edit_state {
+                        let alias = edit.alias.lines().join("").trim().to_string();
+                        let local_str = edit.local_port.lines().join("").trim().to_string();
+                        let remote_str = edit.remote_port.lines().join("").trim().to_string();
+
+                        if alias.is_empty() {
+                            app.error_message = Some("Alias cannot be empty".to_string());
+                            return;
+                        }
+
+                        let local_port = match local_str.parse::<u16>() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                app.error_message = Some(format!("Invalid local port: '{}'", local_str));
+                                return;
+                            }
+                        };
+                        let remote_port = match remote_str.parse::<u16>() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                app.error_message = Some(format!("Invalid remote port: '{}'", remote_str));
+                                return;
+                            }
+                        };
+
+                        let edit_index = edit.edit_index;
+                        let rule = PortForwardingRule { alias, local_port, remote_port };
+
+                        if let Some(idx) = edit_index {
+                            if idx < app.settings.port_forwarding_rules.len() {
+                                app.settings.port_forwarding_rules[idx] = rule;
+                            }
+                        } else {
+                            app.settings.port_forwarding_rules.push(rule);
+                        }
+
+                        if let Err(e) = app.settings.save() {
+                            app.error_message = Some(format!("Failed to save settings: {}", e));
+                        }
+
+                        if let Screen::PortForwards(ref mut state) = app.screen {
+                            state.mode = PortForwardsMode::GlobalEdit;
+                            state.edit_state = None;
+                        }
+                    }
+                }
+            }
+            Message::CancelPortForwardEdit => {
+                if let Screen::PortForwards(ref mut state) = app.screen {
+                    state.mode = PortForwardsMode::GlobalEdit;
+                    state.edit_state = None;
                 }
             }
             _ => {}

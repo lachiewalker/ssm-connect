@@ -12,8 +12,10 @@ pub struct App {
     pub should_quit: bool,
     pub loading: LoadingState,
     pub error_message: Option<String>,
+    pub info_message: Option<String>,
     pub pending_connection: Option<String>, // Instance ID to connect to
     pub settings: Settings, // Settings cached in memory
+    pub polling_instance_state: bool, // Track if we should poll for instance state changes
 }
 
 #[derive(Debug)]
@@ -23,6 +25,7 @@ pub enum Screen {
     RegionSelection { selected: usize },
     Help,
     Settings(SettingsScreenState),
+    PortForwards(PortForwardsScreenState),
 }
 
 #[derive(Debug)]
@@ -55,7 +58,39 @@ pub enum SettingsMode {
     Edit,   // Adding/editing a command
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct PortForwardsScreenState {
+    pub mode: PortForwardsMode,
+    pub instance_id: String,
+    pub instance_name: String,
+    pub selected_rule: usize,
+    pub edit_state: Option<PortForwardEditState>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum PortForwardsMode {
+    InstanceToggle,
+    GlobalEdit,
+    EditRule,
+}
+
+#[derive(Debug)]
+pub struct PortForwardEditState {
+    pub alias: TextArea<'static>,
+    pub local_port: TextArea<'static>,
+    pub remote_port: TextArea<'static>,
+    pub focused_field: PortForwardField,
+    pub edit_index: Option<usize>, // None = new, Some(i) = editing
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PortForwardField {
+    Alias,
+    LocalPort,
+    RemotePort,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum LoadingState {
     Idle,
     ValidatingCredentials,
@@ -85,6 +120,7 @@ pub enum Message {
 
     // AWS operation messages
     InstancesLoaded(Vec<EC2Instance>),
+    ReloadInstances,
     StartInstance,
     InstanceStarted(String), // instance_id
     ConnectToInstance,
@@ -97,6 +133,18 @@ pub enum Message {
     DeleteCommand,
     SaveCommand,
     CancelEdit,
+
+    // Port forwarding messages
+    OpenPortForwards,
+    TogglePortForward,
+    OpenPortForwardRules,
+    AddPortForwardRule,
+    EditPortForwardRule,
+    DeletePortForwardRule,
+    SavePortForwardRule,
+    CancelPortForwardEdit,
+    NextPortForwardField,
+    PreviousPortForwardField,
 
     // Error messages
     Error(String),
@@ -113,8 +161,10 @@ impl App {
             should_quit: false,
             loading: LoadingState::Idle,
             error_message: None,
+            info_message: None,
             pending_connection: None,
             settings,
+            polling_instance_state: false,
         }
     }
 
@@ -146,6 +196,30 @@ impl App {
                             }
                         }
                     }
+                } else if let Screen::PortForwards(ref mut state) = self.screen {
+                    match state.mode {
+                        PortForwardsMode::InstanceToggle => {
+                            let len = self.settings.port_forwarding_rules.len();
+                            if len > 0 {
+                                if state.selected_rule > 0 {
+                                    state.selected_rule -= 1;
+                                } else {
+                                    state.selected_rule = len - 1;
+                                }
+                            }
+                        }
+                        PortForwardsMode::GlobalEdit => {
+                            let len = self.settings.port_forwarding_rules.len();
+                            if len > 0 {
+                                if state.selected_rule > 0 {
+                                    state.selected_rule -= 1;
+                                } else {
+                                    state.selected_rule = len - 1;
+                                }
+                            }
+                        }
+                        PortForwardsMode::EditRule => {}
+                    }
                 }
             }
             Message::NavigateDown => {
@@ -172,6 +246,30 @@ impl App {
                             }
                         }
                     }
+                } else if let Screen::PortForwards(ref mut state) = self.screen {
+                    match state.mode {
+                        PortForwardsMode::InstanceToggle => {
+                            let len = self.settings.port_forwarding_rules.len();
+                            if len > 0 {
+                                if state.selected_rule < len - 1 {
+                                    state.selected_rule += 1;
+                                } else {
+                                    state.selected_rule = 0;
+                                }
+                            }
+                        }
+                        PortForwardsMode::GlobalEdit => {
+                            let len = self.settings.port_forwarding_rules.len();
+                            if len > 0 {
+                                if state.selected_rule < len - 1 {
+                                    state.selected_rule += 1;
+                                } else {
+                                    state.selected_rule = 0;
+                                }
+                            }
+                        }
+                        PortForwardsMode::EditRule => {}
+                    }
                 }
             }
             Message::Select => {
@@ -187,6 +285,19 @@ impl App {
                         // Handled by CancelEdit message
                     } else {
                         self.screen = Screen::InstanceList;
+                    }
+                } else if let Screen::PortForwards(ref mut state) = self.screen {
+                    match state.mode {
+                        PortForwardsMode::InstanceToggle => {
+                            self.screen = Screen::InstanceList;
+                        }
+                        PortForwardsMode::GlobalEdit => {
+                            state.mode = PortForwardsMode::InstanceToggle;
+                            state.selected_rule = 0;
+                        }
+                        PortForwardsMode::EditRule => {
+                            // Handled by CancelPortForwardEdit
+                        }
                     }
                 }
             }
@@ -230,6 +341,28 @@ impl App {
                     state.previous_field();
                 }
             }
+            Message::NextPortForwardField => {
+                if let Screen::PortForwards(ref mut state) = self.screen {
+                    if let Some(ref mut edit) = state.edit_state {
+                        edit.focused_field = match edit.focused_field {
+                            PortForwardField::Alias => PortForwardField::LocalPort,
+                            PortForwardField::LocalPort => PortForwardField::RemotePort,
+                            PortForwardField::RemotePort => PortForwardField::Alias,
+                        };
+                    }
+                }
+            }
+            Message::PreviousPortForwardField => {
+                if let Screen::PortForwards(ref mut state) = self.screen {
+                    if let Some(ref mut edit) = state.edit_state {
+                        edit.focused_field = match edit.focused_field {
+                            PortForwardField::Alias => PortForwardField::RemotePort,
+                            PortForwardField::LocalPort => PortForwardField::Alias,
+                            PortForwardField::RemotePort => PortForwardField::LocalPort,
+                        };
+                    }
+                }
+            }
             Message::CredentialValidationFailed(err) => {
                 self.error_message = Some(format!("Credential validation failed: {}", err));
                 self.loading = LoadingState::Idle;
@@ -240,10 +373,23 @@ impl App {
                 if !self.instances.is_empty() && self.selected_instance.is_none() {
                     self.selected_instance = Some(0);
                 }
+
+                // Check if any instances are in transitional states
+                use crate::aws::types::InstanceState;
+                let has_transitional = self.instances.iter().any(|i|
+                    matches!(i.state, InstanceState::Pending | InstanceState::Stopping)
+                );
+
+                // Stop polling if no instances are in transitional states
+                if !has_transitional {
+                    self.polling_instance_state = false;
+                    self.info_message = None;
+                }
             }
             Message::InstanceStarted(instance_id) => {
                 self.loading = LoadingState::Idle;
-                self.error_message = Some(format!("Instance {} is starting", instance_id));
+                self.info_message = Some(format!("Instance {} is starting", instance_id));
+                self.polling_instance_state = true; // Enable polling until instance is running
                 // Will reload instances to show new state
             }
             Message::Error(err) => {
@@ -252,6 +398,7 @@ impl App {
             }
             Message::ClearError => {
                 self.error_message = None;
+                self.info_message = None;
             }
             Message::RegionChanged(new_region) => {
                 self.region = new_region;

@@ -1,6 +1,9 @@
 use crate::aws::types::AwsCredentials;
+use crate::config::PortForwardingRule;
 use crate::error::{AppError, Result};
-use std::process::Command;
+use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 pub struct SsmManager {
     #[allow(dead_code)]
@@ -13,6 +16,34 @@ impl SsmManager {
         Self {
             client: aws_sdk_ssm::Client::new(config),
             region,
+        }
+    }
+
+    /// Returns true if the SSM agent for the given instance is online according to the SSM API.
+    pub async fn is_agent_online(&self, instance_id: &str) -> bool {
+        use aws_sdk_ssm::types::InstanceInformationStringFilter;
+
+        let filter = match InstanceInformationStringFilter::builder()
+            .key("InstanceIds")
+            .values(instance_id)
+            .build()
+        {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+
+        match self
+            .client
+            .describe_instance_information()
+            .filters(filter)
+            .send()
+            .await
+        {
+            Ok(output) => output
+                .instance_information_list()
+                .iter()
+                .any(|info| info.ping_status().is_some_and(|s| s.as_str() == "Online")),
+            Err(_) => false,
         }
     }
 
@@ -72,15 +103,90 @@ impl SsmManager {
             }
         }
 
-        let status = cmd
-            .status()
-            .map_err(|e| AppError::SsmSession(format!("Failed to start SSM session: {}", e)))?;
+        // On Unix, replace the current process with `aws` so that Ctrl+C inside the
+        // remote session is forwarded to the remote host rather than killing this
+        // parent process and tearing down the connection.
+        #[cfg(unix)]
+        {
+            let err = cmd.exec();
+            return Err(AppError::SsmSession(format!("Failed to start SSM session: {}", err)));
+        }
 
-        if !status.success() {
-            return Err(AppError::SsmSession(format!(
-                "SSM session exited with code: {:?}",
-                status.code()
-            )));
+        // Fallback for non-Unix platforms.
+        #[cfg(not(unix))]
+        {
+            let status = cmd
+                .status()
+                .map_err(|e| AppError::SsmSession(format!("Failed to start SSM session: {}", e)))?;
+
+            if !status.success() {
+                return Err(AppError::SsmSession(format!(
+                    "SSM session exited with code: {:?}",
+                    status.code()
+                )));
+            }
+
+            Ok(())
+        }
+    }
+
+    pub fn start_port_forwarding(
+        &self,
+        instance_id: &str,
+        rule: &PortForwardingRule,
+        credentials: Option<&AwsCredentials>,
+    ) -> Result<()> {
+        let mut cmd = Command::new("aws");
+        cmd.arg("ssm")
+            .arg("start-session")
+            .arg("--target")
+            .arg(instance_id)
+            .arg("--region")
+            .arg(&self.region)
+            .arg("--document-name")
+            .arg("AWS-StartPortForwardingSession")
+            .arg("--parameters")
+            .arg(format!(
+                r#"portNumber=["{}"],localPortNumber=["{}"]"#,
+                rule.remote_port, rule.local_port
+            ));
+
+        if let Some(creds) = credentials {
+            if creds.access_key_id != "default" {
+                cmd.env("AWS_ACCESS_KEY_ID", &creds.access_key_id);
+                cmd.env("AWS_SECRET_ACCESS_KEY", &creds.secret_access_key);
+                if let Some(token) = &creds.session_token {
+                    cmd.env("AWS_SESSION_TOKEN", token);
+                }
+            }
+        }
+
+        cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+
+        let alias = rule.alias.clone();
+        let mut child = cmd.spawn().map_err(|e| {
+            AppError::SsmSession(format!(
+                "Failed to start port forwarding for {}: {}",
+                rule.alias, e
+            ))
+        })?;
+
+        // Read stderr from the child process in a background thread so any AWS CLI
+        // errors (auth failures, port conflicts, unreachable targets, etc.) are
+        // captured in the log file rather than silently discarded.
+        if let Some(stderr) = child.stderr.take() {
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                for line in BufReader::new(stderr).lines().flatten() {
+                    tracing::warn!(alias = %alias, "port-forward: {}", line);
+                }
+                // Log the exit status once the process terminates.
+                if let Ok(status) = child.wait() {
+                    if !status.success() {
+                        tracing::error!(alias = %alias, status = %status, "port-forward process exited");
+                    }
+                }
+            });
         }
 
         Ok(())

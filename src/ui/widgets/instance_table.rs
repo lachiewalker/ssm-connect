@@ -1,12 +1,13 @@
 use crate::aws::types::EC2Instance;
+use crate::config::Settings;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
-pub fn render(f: &mut Frame, area: Rect, instances: &[EC2Instance], selected_instance: Option<usize>) {
-    let header_cells = ["Name", "Instance ID", "Type", "State", "Private IP"]
+pub fn render(f: &mut Frame, area: Rect, instances: &[EC2Instance], selected_instance: Option<usize>, settings: &Settings) {
+    let header_cells = ["Name", "Instance ID", "Type", "State", "Private IP", "Forwards"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
     let header = Row::new(header_cells).height(1).bottom_margin(1);
@@ -26,12 +27,25 @@ pub fn render(f: &mut Frame, area: Rect, instances: &[EC2Instance], selected_ins
             let state_cell = Cell::from(instance.state.as_str())
                 .style(Style::default().fg(instance.state.color()));
 
+            let forwards_str = settings
+                .enabled_forwards_for(&instance.id)
+                .iter()
+                .map(|r| r.alias.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let forwards_display = if forwards_str.is_empty() {
+                "-".to_string()
+            } else {
+                forwards_str
+            };
+
             let cells = vec![
                 Cell::from(instance.name.clone()),
                 Cell::from(instance.id.clone()),
                 Cell::from(instance.instance_type.clone()),
                 state_cell,
                 Cell::from(instance.private_ip.clone().unwrap_or_else(|| "-".to_string())),
+                Cell::from(forwards_display),
             ];
 
             Row::new(cells).style(style).height(1)
@@ -39,11 +53,12 @@ pub fn render(f: &mut Frame, area: Rect, instances: &[EC2Instance], selected_ins
         .collect();
 
     let widths = [
-        ratatui::layout::Constraint::Percentage(25),
-        ratatui::layout::Constraint::Percentage(25),
+        ratatui::layout::Constraint::Percentage(22),
+        ratatui::layout::Constraint::Percentage(22),
+        ratatui::layout::Constraint::Percentage(12),
+        ratatui::layout::Constraint::Percentage(12),
         ratatui::layout::Constraint::Percentage(15),
-        ratatui::layout::Constraint::Percentage(15),
-        ratatui::layout::Constraint::Percentage(20),
+        ratatui::layout::Constraint::Percentage(17),
     ];
 
     let table = Table::new(rows, widths)

@@ -1,4 +1,5 @@
 use crate::aws::types::EC2Instance;
+use crate::config::Settings;
 use crate::ui::widgets::instance_table;
 use crate::ui::widgets::status_bar;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -13,6 +14,8 @@ pub fn render_with_data(
     instances: &[EC2Instance],
     selected_instance: Option<usize>,
     error_message: &Option<String>,
+    info_message: &Option<String>,
+    settings: &Settings,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -36,16 +39,21 @@ pub fn render_with_data(
     f.render_widget(header, chunks[0]);
 
     // Instance table
-    instance_table::render(f, chunks[1], instances, selected_instance);
+    instance_table::render(f, chunks[1], instances, selected_instance, settings);
 
     // Status bar
     status_bar::render(f, chunks[2]);
 
-    // Error message
+    // Error or Info message
     if let Some(ref error) = error_message {
         let error_text = Paragraph::new(error.as_str())
             .style(Style::default().fg(Color::Red))
             .block(Block::default().borders(Borders::ALL).title("Error - Press any key to dismiss"));
         f.render_widget(error_text, chunks[3]);
+    } else if let Some(ref info) = info_message {
+        let info_text = Paragraph::new(info.as_str())
+            .style(Style::default().fg(Color::Yellow))
+            .block(Block::default().borders(Borders::ALL).title("Info - Press any key to dismiss"));
+        f.render_widget(info_text, chunks[3]);
     }
 }
